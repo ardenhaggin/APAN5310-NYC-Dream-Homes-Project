@@ -1,0 +1,489 @@
+---
+title: "Dream Homes NYC: Dynamic Reporting Dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, message=FALSE, warning=FALSE, include=FALSE}
+# install.packages("DBI")
+# install.packages("RPostgres")
+library(DBI)
+library(RPostgres)
+library(flexdashboard)
+library(plotly)
+library(DT)
+library(shiny)
+library(dplyr)
+library(scales)
+library(ggrepel)
+```
+
+```{r connection_constants, include=FALSE}
+# defining constants for db connection
+DATABASE <- "SQL_Class_Project"
+PORT <- 5432
+PASSWORD <- "123"  # Adjust based on your password ("password")
+USER <- "postgres"
+HOST <- "localhost"
+```
+
+```{r connection_PostgreSQL, include=FALSE}
+# creating the connection
+con <- dbConnect(
+  RPostgres::Postgres(),
+  dbname = DATABASE,
+  host = HOST,
+  port = PORT,
+  user = USER,
+  password = PASSWORD
+)
+```
+
+```{r loading_function, include=FALSE}
+# loading tables from postgresql
+load_realtor_tables <- function(con) {
+  table_names <- c(
+    "appointments", "clients", "commissions", "departments", "employees",
+    "equipment", "equipment_types", "expense_categories", "expenses",
+    "listing_features", "listings", "offices", "parks", "parks_properties",
+    "payrolls", "positions", "properties", "sales", "schools",
+    "schools_properties", "service_requests", "violations"
+  )
+  
+  tables <- setNames(
+    lapply(table_names, function(tbl) dbReadTable(con, tbl)),
+    table_names
+  )
+  
+  return(tables)
+}
+```
+
+```{r loading_tables, include=FALSE}
+realty_data <- load_realtor_tables(con)
+
+# assign global environment -- distinct tables
+invisible(
+  lapply(names(realty_data), function(name) {
+    assign(name, realty_data[[name]], envir = .GlobalEnv)
+  })
+)
+```
+
+```{r check_tables, include=FALSE, eval=TRUE}
+head(appointments)
+```
+
+```{r intro_stats, echo=FALSE}
+num_employees <- employees %>%
+  select(employee_id) %>%
+  distinct() %>%
+  nrow()
+
+num_offices <- offices %>%
+  select(office_id) %>%
+  distinct() %>%
+  nrow()
+
+num_clients <- clients %>%
+  select(client_id) %>%
+  distinct() %>%
+  nrow()
+
+total_expenses <- sum(expenses$expense_amount, na.rm = TRUE)
+formatted_total_expenses <- scales::comma(total_expenses)
+
+num_active_listings <- sum(listings$active == TRUE, na.rm = TRUE)
+num_inactive_listings <- sum(listings$active == FALSE, na.rm = TRUE)
+total_sales <- sum(sales$sale_price, na.rm = TRUE)
+formatted_total_sales <- scales::comma(total_sales)
+```
+
+
+# Introduction
+
+The purpose of this Dynamic Reporting Dashboard is to assist NYC Dream Homes executives in extracting key insights from our database. 
+
+Here are some high-level details about NYC Dream Homes: <br>
+
+&nbsp;&nbsp;&nbsp;&nbsp;**Metrics to Support Firm Organization**: <br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- Number of Current Clients: `r num_clients` <br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- Number of Current Employees: `r num_employees` <br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- Number of Current Offices:  `r num_offices` <br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- Total Expenses:  $`r formatted_total_expenses` <br>
+
+&nbsp;&nbsp;&nbsp;&nbsp;**Metrics to Support Firm Operations**: <br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- Number of Active Listings: `r num_active_listings` <br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- Number of Successful Sales: `r num_inactive_listings` <br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- Total Sales Revenue: $`r formatted_total_sales` <br>
+
+
+# Sales Tracking
+
+## Column {.sidebar data-width=250}
+-----------------------------------------------------------------------
+
+```{r salestracking_cleaning, echo=FALSE}
+sales_full <- sales %>%
+  left_join(commissions, by = "sale_id") %>%       
+  left_join(employees, by = "employee_id") %>%     
+  left_join(offices, by = "office_id") 
+
+sales_full$sale_date <- as.Date(sales_full$sale_date)
+year_choices <- sort(unique(format(sales_full$sale_date, "%Y")))
+```
+
+```{r salestracking_inputs, echo=FALSE}
+selectInput(
+  inputId = "selected_office_address",
+  label = "Select Office Address:",
+  choices = c("All", sort(unique(sales_full$address))),
+  selected = "All"
+)
+
+selectInput(
+  inputId = "start_year",
+  label = "Start Year:",
+  choices = year_choices,
+  selected = min(year_choices)
+)
+
+selectInput(
+  inputId = "end_year",
+  label = "End Year:",
+  choices = year_choices,
+  selected = max(year_choices)
+)
+
+checkboxInput(
+  inputId = "show_sales_values",
+  label = "Show Gross Sales Value",
+  value = TRUE
+)
+```
+
+## Row {data-height=600}
+-----------------------------------------------------------------------
+
+```{r salestracking_plot, echo=FALSE}
+renderPlot({
+  req(input$start_year, input$end_year, input$selected_office_address)
+  
+  start_yr <- as.numeric(input$start_year)
+  end_yr <- as.numeric(input$end_year)
+  
+  if (start_yr > end_yr) {
+    temp <- start_yr
+    start_yr <- end_yr
+    end_yr <- temp
+  }
+  
+  filtered_sales <- sales_full %>%
+    filter(if (input$selected_office_address == "All") TRUE else address == input$selected_office_address) %>%
+    filter(format(sale_date, "%Y") >= start_yr,
+           format(sale_date, "%Y") <= end_yr) %>%
+    mutate(
+      sale_month = format(sale_date, "%b"),
+      month_num = match(sale_month, month.abb)
+    ) %>%
+    group_by(sale_month, month_num) %>%
+    summarise(total_sales = sum(sale_price, na.rm = TRUE), .groups = "drop") %>%
+    arrange(month_num)
+  
+  p <- ggplot(filtered_sales, aes(x = reorder(sale_month, month_num), y = total_sales)) +
+    geom_col(fill = "#2780E3") +
+    labs(
+      title = paste0("Total Sales by Month from ", start_yr, " to ", end_yr,
+                     " at ", ifelse(input$selected_office_address == "All", "All Offices", input$selected_office_address)),
+      x = "Month",
+      y = "Total Sales ($)"
+    ) +
+    scale_y_continuous(labels = scales::label_dollar()) +
+    theme_minimal()
+  
+  if (isTRUE(input$show_sales_values)) {
+    p <- p + geom_text(aes(label = scales::label_dollar()(total_sales)), 
+                       vjust = -0.5, size = 3.5)
+  }
+  
+  p
+}, width = 1200)
+```
+
+
+# Average Cost per Sale
+
+## Column {.sidebar data-width=250}
+-----------------------------------------------------------------------
+
+```{r costsale_cleaning, echo=FALSE}
+sales_commissions <- sales %>%
+  left_join(commissions, by = "sale_id") %>%
+  select(sale_id, employee_id, sale_price)
+
+employee_sales <- sales_commissions %>%
+  group_by(employee_id) %>%
+  summarise(
+    total_sales = n(),  
+    total_sales_value = sum(sale_price, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+employee_expenses <- expenses %>%
+  group_by(employee_id) %>%
+  summarise(total_expense = sum(expense_amount, na.rm = TRUE), .groups = "drop")
+
+employee_commissions <- commissions %>%
+  group_by(employee_id) %>%
+  summarise(total_commission = sum(commission_amount, na.rm = TRUE), .groups = "drop")
+
+employee_summary <- employee_sales %>%
+  left_join(employee_expenses, by = "employee_id") %>%
+  left_join(employee_commissions, by = "employee_id") %>%
+  mutate(
+    cost_per_sale = total_expense / total_sales,
+    profit_after_expense = total_commission - total_expense
+  )
+
+employee_summary <- employee_summary %>%
+  left_join(employees %>% select(employee_id, first_name, last_name, office_id), by = "employee_id") %>%
+  left_join(offices %>% select(office_id, address), by = "office_id")
+```
+
+```{r costsale_inputs, echo=FALSE}
+selectInput(
+  inputId = "selected_office",
+  label = "Select Office Address:",
+  choices = c("All", sort(unique(employee_summary$address))),
+  selected = "All"
+)
+
+checkboxInput(
+  inputId = "show_labels",
+  label = "Show Employee Names",
+  value = FALSE
+)
+
+checkboxInput(
+  inputId = "show_trendline",
+  label = "Show Trendline",
+  value = FALSE
+)
+```
+
+## Row {data-height=600}
+-----------------------------------------------------------------------
+
+```{r costsale_plot, echo=FALSE}
+renderPlot({
+  req(input$selected_office)
+
+  plot_data <- employee_summary
+
+  if (input$selected_office != "All") {
+    plot_data <- plot_data %>% filter(address == input$selected_office)
+  }
+
+  plot_data <- plot_data %>% filter(total_sales > 0)
+
+  p <- ggplot(plot_data, aes(x = total_sales, y = cost_per_sale)) +
+    geom_point(color = "#2780E3", size = 3, alpha = 0.7) +
+    labs(
+      title = paste("Cost per Sale vs. Total Sales", 
+                    ifelse(input$selected_office == "All", " (All Offices)", paste("at", input$selected_office))),
+      x = "Total Sales (Number of Sales)",
+      y = "Cost per Sale ($)"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.line = element_line(color = "grey50"),
+      axis.ticks = element_line(color = "grey50"),
+      axis.ticks.length = unit(5, "pt")
+    ) +
+    scale_y_continuous(labels = scales::dollar_format())
+
+  if (isTRUE(input$show_labels)) {
+    p <- p + geom_text_repel(aes(label = paste(first_name, last_name)),
+                             size = 3,
+                             box.padding = 0.35,
+                             point.padding = 0.3,
+                             segment.color = "grey50")
+  }
+
+  if (isTRUE(input$show_trendline)) {
+    p <- p + geom_smooth(method = "lm", se = FALSE, color = "#1A67BE", linetype = "dashed")
+  }
+
+  p
+}, width = 1200, height = 600)
+```
+
+# Broker-Agent Performance
+
+## Column {.sidebar data-width=250}
+-----------------------------------------------------------------------
+
+```{r performance_cleaning, echo=FALSE}
+# this is repeated below, but necessary to keep for inputs
+employees$office_id <- as.integer(employees$office_id)
+offices$office_id <- as.integer(offices$office_id)
+
+employee_commissions <- commissions %>%
+  left_join(employees, by = "employee_id") %>%   
+  left_join(positions, by = "position_id") %>%
+  left_join(offices, by = "office_id") %>%        
+  mutate(employee_name = paste(first_name, last_name))
+```
+
+```{r performance_inputs, echo=FALSE}
+selectInput("selected_address", "Select Office Address:", 
+            choices = sort(unique(employee_commissions$address)))
+
+selectInput("selected_role", "Select Role:", 
+            choices = c("Broker", "Real Estate Agent"))
+
+sliderInput("top_n", "Number of Employees to Display:", 
+            min = 1, max = 10, value = 5)
+
+checkboxInput("show_commission_values", "Show Commission Values", value = TRUE)
+```
+
+## Row {data-height=600}
+-----------------------------------------------------------------------
+
+```{r performance_plot, echo=FALSE}
+renderPlot({
+  req(input$selected_address, input$selected_role, input$top_n)
+
+  # recreate employee_commissions inside reactive to ensure address is present -- otherwise error when calling input
+  employee_commissions_full <- commissions %>%
+    left_join(employees, by = "employee_id") %>%
+    left_join(positions, by = "position_id") %>%
+    left_join(offices, by = "office_id") %>%
+    mutate(employee_name = paste(last_name, first_name))
+
+  summary_data <- employee_commissions_full %>%
+    filter(address == input$selected_address,
+           position_title == input$selected_role) %>%
+    group_by(employee_name) %>%
+    summarise(total_commission = sum(commission_amount, na.rm = TRUE), .groups = "drop") %>%
+    arrange(desc(total_commission)) %>%
+    head(input$top_n)
+
+  p <- ggplot(summary_data, aes(x = total_commission, y = reorder(employee_name, total_commission))) +
+    geom_col(fill = "#2780E3") +
+    labs(
+      title = paste("Top", input$top_n, input$selected_role, "Commissions at", input$selected_address),
+      x = "Total Commission ($)",
+      y = "Employee"
+    ) +
+    scale_x_continuous(labels = scales::dollar, limits = c(0, 600000)) +
+    theme_minimal(base_size = 14)
+
+  if (input$show_commission_values) {
+    p <- p + geom_text(aes(label = scales::dollar(total_commission)), hjust = -0.1, size = 3.5)
+  }
+
+  p
+}, width = 1200)
+
+```
+
+# Client Demographics
+
+## Column {.sidebar data-width=250}
+-----------------------------------------------------------------------
+
+```{r clients_cleaning, echo=FALSE}
+clients <- clients %>%
+  mutate(
+    income_bin = cut(
+      income,
+      breaks = c(0, 50000, 100000, 150000, 200000, Inf), 
+      labels = c("<50k", "50-100k", "100-150k", "150-200k", "200k+"),
+      include.lowest = TRUE
+    )
+  )
+```
+
+```{r clients_input, echo=FALSE}
+selectInput(
+  inputId = "selected_income_bins",
+  label = "Select Income Level:",
+  choices = levels(clients$income_bin),
+  selected = levels(clients$income_bin), 
+  multiple = TRUE
+)
+
+selectInput(
+  inputId = "selected_family_sizes",
+  label = "Select Family Size:",
+  choices = sort(unique(clients$family_size)),
+  selected = unique(clients$family_size),
+  multiple = TRUE
+)
+```
+
+## Row {data-height=600}
+-----------------------------------------------------------------------
+
+```{r clients_plot, echo=FALSE}
+renderPlot({
+  req(input$selected_income_bins, input$selected_family_sizes)
+  
+  filtered_clients <- clients %>%
+    filter(
+      income_bin %in% input$selected_income_bins,
+      family_size %in% input$selected_family_sizes
+    )
+  
+  summary_data <- filtered_clients %>%
+    group_by(income_bin, family_size) %>%
+    summarise(client_count = n(), .groups = "drop")
+  
+  ggplot(summary_data, aes(x = income_bin, y = factor(family_size), fill = client_count)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient(low = "#E3EAF4", high = "#2780E3", name = "Clients") +
+    labs(
+      title = "Client Distribution by Income and Family Size",
+      x = "Income Bin",
+      y = "Family Size"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      panel.grid = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+}, width = 1200, height = 700)
+```
+
+
+# Tab 5: Insert Title
+
+## Column {.sidebar data-width=250}
+-----------------------------------------------------------------------
+
+```{r , echo=FALSE}
+
+```
+
+```{r , echo=FALSE}
+
+```
+
+## Row {data-height=600}
+-----------------------------------------------------------------------
+
+```{r , echo=FALSE}
+
+```
+
