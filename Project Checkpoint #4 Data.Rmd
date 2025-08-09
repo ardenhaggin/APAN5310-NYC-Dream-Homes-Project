@@ -1,0 +1,1344 @@
+---
+title: "Project Checkpoint 4: Dream Homes NYC Project ETL"
+author: "David Skorodinsky, Daniel Jesus Jesurum Cumberbatch, Arden Haggin"
+date: "2025-07-25"
+output: 
+  html_document:
+    theme: cosmo
+    toc: no
+    toc_float:
+      collapsed: true
+---
+
+```{r, warning=FALSE, message=FALSE}
+library(randomNames)
+library(lubridate)
+library(readxl)
+library(stringr)
+library(charlatan)
+library(data.table)
+library(DT)
+library(dplyr)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r constants, include=FALSE}
+n.employees <- 250
+```
+
+```{r functions}
+assign_position <- function(dept) {
+  sample(dept_positions[[dept]], 1)
+}
+
+clean_name <- function(name) {
+  tolower(gsub("[^a-z]", "", name))
+}
+
+generate_phone <- function(area_code) {
+  central_office <- sprintf("%03d", sample(100:999, 1))   
+  line_number <- sprintf("%04d", sample(0:9999, 1))        
+  paste0("(", area_code, ") ", central_office, "-", line_number)
+}
+```
+
+## Introduction {.tabset}
+
+We performed a comprehensive data preparation pipeline involving both cleaning and simulation across multiple datasets. 
+
+1. Data Cleaning: Data was sourced from publicly available online datasets (e.g., Street Easy, NYC Open Data, U.S. Government's Open Data) or R packages. The cleaning process varied by each dataset, but the general workflow involved removing irrelevant or incomplete records, standardizing column formats and text fields, and restructuring tables for consistency. 
+
+2. Data Simulation: To supplement incomplete datasets and preserve privacy, simulated personally identifiable information (PII) was generated for entities such as clients and employees (among many others). Extra care was taken to ensure that the simulated data was realistic. For example, employee salaries were determined based off the employee_since value (a field analogous to hire date) and noise was added to introduce variability. 
+
+### Employees
+
+#### Simulating Salaries
+
+```{r}
+set.seed(100)
+
+props <- c(0.7, 0.25, 0.05) # clustering approach to simulate real world scenario
+cluster_ids <- sample(1:3, size = n.employees, replace = TRUE, prob = props)
+
+salaries <- numeric(n.employees)
+
+for (i in 1:n.employees) {
+  if (cluster_ids[i] == 1) {
+    # Majority group around 80k
+    salaries[i] <- rnorm(1, mean = 80000, sd = 7000)
+  } else if (cluster_ids[i] == 2) {
+    # Mid-high earners around 120k
+    salaries[i] <- rnorm(1, mean = 120000, sd = 15000)
+  } else {
+    # High earners around 180k
+    salaries[i] <- rnorm(1, mean = 180000, sd = 10000)
+  }
+}
+
+salaries <- pmin(pmax(salaries, 60000), 200000) # cut range of salaries (60k-200k)
+
+employees_info_df <- data.frame(
+  employee_id = sprintf("%05d", seq_len(n.employees)),
+  salary = round(salaries, 0)
+)
+head(employees_info_df)
+```
+
+#### Randomly Assigning Departments and Positions
+
+```{r}
+set.seed(100)
+
+departments <- c("Sales", "Property Management", "Marketing", "Administration", "Finance")
+probs <- c(0.40, 0.15, 0.15, 0.15, 0.15) # majority in Sales to simulate real world scenario
+
+employees_info_df$department <- sample(departments, size = n.employees, replace = TRUE, prob = probs)
+
+# positions mapping
+dept_positions <- list(
+  Sales = c("Real Estate Agent", "Broker"), 
+  `Property Management` = c("Property Manager", "Leasing Agent"),
+  Marketing = c("Marketing Coordinator", "Marketing Manager"),
+  Administration = c("Administrative Assistant", "Office Manager"),
+  Finance = c("Accountant", "Finance Manager")
+)
+
+employees_info_df$position <- sapply(employees_info_df$department, assign_position)
+head(employees_info_df)
+```
+
+#### Using randomNames to Generate Employee Names
+
+```{r}
+set.seed(100)
+
+employee_names <- randomNames(n.employees, which.names = "both", name.order = "first.last")
+employees_info_df$employee_name <- employee_names
+
+name_split <- strsplit(employees_info_df$employee_name, split = ",")
+
+last_names <- sapply(name_split, function(x) trimws(x[1]))
+first_names <- sapply(name_split, function(x) trimws(x[2]))
+
+employees_info_df$first_name <- first_names
+employees_info_df$last_name <- last_names
+
+head(employees_info_df)
+```
+
+#### Using lubridate to Generate Hire Dates
+
+```{r}
+# normalizing salary so that a reasonable start date can be assigned
+# assumption here is that a higher salary = more time at the company 
+setDT(employees_info_df)
+
+set.seed(100)
+
+start_date <- ymd("2010-01-01")
+end_date <- ymd("2025-07-01")
+all_dates <- seq(start_date, end_date, by = "day")
+total_days <- length(all_dates)
+
+# need to have these individuals hired earlier on so sales can take place
+brokers_agents <- employees_info_df[position %in% c("Broker", "Real Estate Agent")]
+others <- employees_info_df[!position %in% c("Broker", "Real Estate Agent")]
+
+n_ba <- nrow(brokers_agents)
+ba_indices <- sample(1:round(0.2 * total_days), n_ba, replace = TRUE) # assign from first 20% of date range (earliest)
+brokers_agents[, employee_since := all_dates[ba_indices]]
+
+salaries <- others$salary
+salary_norm <- (salaries - min(salaries)) / (max(salaries) - min(salaries))
+
+date_indices <- sapply(salary_norm, function(x) {
+  base_index <- round((1 - x) * (total_days - 1))
+  noise <- sample(-30:30, 1)
+  idx <- base_index + noise
+  idx <- max(min(idx, total_days - 1), 0)
+  return(idx + 1)
+})
+
+others[, employee_since := all_dates[date_indices]]
+
+employees_info_df <- rbind(brokers_agents, others)
+head(employees_info_df)
+```
+
+#### Generating Emails with Pre-Defined Domains
+
+```{r}
+set.seed(100)
+
+first_clean <- sapply(employees_info_df$first_name, clean_name)
+last_clean <- sapply(employees_info_df$last_name, clean_name)
+
+email_random_number <- sample(10:999, n.employees, replace = TRUE)
+
+domains <- c("@gmail.com", "@yahoo.com", "@outlook.com")
+email_domain <- sample(domains, n.employees, replace = TRUE)
+
+emails <- paste0(first_clean, last_clean, email_random_number, email_domain)
+employees_info_df$email <- emails
+head(employees_info_df)
+```
+
+#### Generating department_id and position_id
+
+```{r}
+dept_levels <- unique(employees_info_df$department) # mapping for department
+department_map <- setNames(seq_along(dept_levels), dept_levels)
+
+pos_levels <- unique(employees_info_df$position) # mapping for position
+position_map <- setNames(seq_along(pos_levels), pos_levels)
+
+employees_info_df$department_id <- department_map[employees_info_df$department]
+employees_info_df$position_id <- position_map[employees_info_df$position]
+
+unique(employees_info_df$department_id)
+unique(employees_info_df$position_id)
+```
+
+#### Generating payroll_id with offset 
+
+```{r}
+employees_info_df$payroll_id <- sprintf("%05d", seq_len(nrow(employees_info_df)) + 11045) # offset so it does not match id
+head(employees_info_df)
+```
+
+
+### Clients
+
+#### Generating Client Names using Data.gov Resources
+
+```{r}
+# have to get creative with names here because we don't want duplicates with clients using randomNames
+# https://catalog.data.gov/dataset/popular-baby-names/resource/02e8f55e-2157-4cb2-961a-2aabb75cbc8b
+baby_names <- read.csv("Popular_Baby_Names.csv")
+client_first_names <- baby_names$Child.s.First.Name
+client_first_names <- paste0(
+  toupper(substr(client_first_names, 1, 1)),
+  tolower(substr(client_first_names, 2, nchar(client_first_names))))
+
+client_first_names_df <- data.frame(first_name = client_first_names, stringsAsFactors = FALSE)
+client_first_names_df <- client_first_names_df[1:1000, , drop = FALSE]
+
+head(client_first_names_df)
+```
+
+```{r}
+census_last_names <- read_excel("Names_2010Census_Top1000.xlsx", skip = 1)
+client_last_names <- census_last_names$SURNAME
+client_last_names <- paste0(
+  toupper(substr(client_last_names, 1, 1)),
+  tolower(substr(client_last_names, 2, nchar(client_last_names))))
+
+client_last_names_df <- data.frame(last_name = client_last_names, stringsAsFactors = FALSE)
+client_last_names_df <- client_last_names_df[1:1000, , drop = FALSE]
+head(client_last_names_df)
+```
+
+```{r}
+clients_info_df <- cbind(client_first_names_df, client_last_names_df)
+head(clients_info_df)
+```
+
+#### Simulating Family Size 
+
+```{r}
+set.seed(100)
+
+family_sizes <- 1:6
+probs <- c(0.3, 0.3, 0.15, 0.1, 0.1, 0.05) # most are singles or couples
+
+clients_info_df$family_size <- sample(
+  family_sizes,
+  size = nrow(clients_info_df),
+  replace = TRUE,
+  prob = probs
+)
+
+head(clients_info_df)
+```
+
+#### Simulating Income
+
+```{r}
+# assumption is that family size is related to income
+set.seed(100) 
+
+income_familysize <- c(
+  "1" = 65000,
+  "2" = 140000,
+  "3" = 160000,
+  "4" = 160000,
+  "5" = 160000,
+  "6" = 190000
+)
+
+base_incomes <- income_familysize[as.character(clients_info_df$family_size)]
+
+random_noise <- rnorm(n = nrow(clients_info_df), mean = 0, sd = 15000) # normally distributed noise
+
+exception_idx <- sample(1:nrow(clients_info_df), size = floor(0.05 * nrow(clients_info_df))) # adding outliers
+random_noise[exception_idx] <- rnorm(length(exception_idx), mean = 20000, sd = 25000) # adding outliers
+
+clients_info_df$income <- pmax(base_incomes + random_noise, 15000)
+clients_info_df$income <- round(clients_info_df$income)
+head(clients_info_df)
+```
+
+#### Generating client_id
+
+```{r}
+clients_info_df$client_id <- sprintf("%05d", seq_len(nrow(clients_info_df)))
+clients_info_df <- clients_info_df[, c("client_id", setdiff(names(clients_info_df), "client_id"))]
+head(clients_info_df)
+```
+
+
+### Addresses 
+
+#### Creating Addresses using NYC OpenData
+
+```{r}
+# https://www.nyc.gov/content/planning/pages/resources/datasets/pad
+nycaddresses <- readLines("bobaadr.txt")
+nycaddresses <- nycaddresses[nycaddresses != ""]
+nycaddresses_split <- strsplit(nycaddresses, ",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)", perl = TRUE)
+
+# the address is located in the 16th item 
+road_names_raw <- sapply(nycaddresses_split, function(x) {
+  if(length(x) >= 16) {
+    gsub("^\"|\"$", "", x[16])
+  } else {
+    NA
+  }
+})
+road_names_raw <- trimws(road_names_raw)
+unique_roads <- unique(road_names_raw)
+unique_roads <- unique_roads[unique_roads != "stname"]
+head(unique_roads)
+```
+
+```{r}
+streets <- unique_roads[grep("STREET", unique_roads)] # need to filter for only addresses that would be homes/apartments
+streets <- streets[!grepl("-", streets)] # remove hyphens
+head(streets)
+```
+
+```{r}
+streets <- str_to_title(streets)
+streets <- str_squish(streets)
+addresses_df <- data.frame(street_name = streets, stringsAsFactors = FALSE)
+head(addresses_df) # unnamed street actually exists in Queens, I checked
+```
+
+```{r}
+# adding building numbers, randomly generated 1:999
+set.seed(100) 
+n.streets <- nrow(addresses_df)
+
+street_numbers <- sample(1:999, n.streets, replace = TRUE)
+addresses_df$building_number <- street_numbers
+head(addresses_df)
+```
+
+```{r}
+# adding apartment numbers for 70% of rows (e.g., the rest can be treated as houses)
+set.seed(100) 
+
+has_apartment <- sample(c(TRUE, FALSE), n.streets, replace = TRUE, prob = c(0.7, 0.3))
+
+random_numbers <- sample(1:999, n.streets, replace = TRUE)
+random_letters <- sample(LETTERS, n.streets, replace = TRUE)
+apartment_numbers <- paste0(random_numbers, random_letters)
+
+# assign apartment numbers only to the selected 70%
+addresses_df$apartment_number <- ifelse(has_apartment, apartment_numbers, NA)
+
+head(addresses_df)
+```
+
+```{r}
+# zipcodes
+set.seed(100)
+addresses_df$zipcode <- sample(10000:14000, nrow(addresses_df), replace = TRUE)
+
+# states and cities (just NY, NYC)
+addresses_df$state <- "NY"
+addresses_df$city <- "New York City"
+
+head(addresses_df)
+```
+
+#### Generating address_id
+
+```{r}
+addresses_df$address_id <- sprintf("%05d", seq_len(nrow(addresses_df)))
+addresses_df <- addresses_df[, c("address_id", setdiff(names(addresses_df), "client_id"))] # bringing to first column
+head(addresses_df)
+```
+
+### Offices
+
+#### Creating Address, City, State
+
+```{r}
+# https://www.metro-manhattan.com/resources/all-buildings/
+
+office_names <- c("11 Madison Avenue", 
+                  "One Bryant Park", 
+                  "201 Varick Street")
+
+offices_df <- data.frame(
+  office_id = sprintf("%05d", seq_along(office_names)), 
+  address = office_names,
+  state = "NY",
+  city = "New York City",
+  stringsAsFactors = FALSE
+)
+head(offices_df)
+```
+
+#### Generating Phone Numbers Randomly 
+
+```{r}
+area_codes <- c("212", "315", "347") # NYC area codes
+random_phones <- sapply(area_codes, generate_phone)
+offices_df$phone_number <- random_phones
+head(offices_df)
+```
+
+#### Randomly Assigning Employees to Offices
+
+```{r}
+office_ids <- offices_df$office_id
+
+# Assumption is that one office is a headquarters 
+probs <- c(0.6, 0.2, 0.2)
+
+employees_info_df$office_id <- sample(
+  office_ids,
+  size = nrow(employees_info_df),
+  replace = TRUE,
+  prob = probs
+)
+
+head(employees_info_df)
+```
+
+
+### Sales 
+
+```{r}
+streeteasy_sales <- fread("medianSalesPrice_All.csv")
+setDT(streeteasy_sales)
+```
+
+#### StreetEasy Open Data: Cleaning
+
+```{r}
+# Convert from wide to long
+sales <- melt(
+  streeteasy_sales,
+  id.vars = c("areaName", "Borough", "areaType"),
+  variable.name = "month",
+  value.name = "median_price",
+  variable.factor = FALSE
+)
+
+# Remove aggregate measures and unneeded columns
+sales <- sales[-(1:5), ] # date in street easy data could not be used -- only from 2010
+sales <- sales[, "median_price"]
+sales <- sales[!is.na(median_price)] # remove rows with NA median_price
+head(sales)
+```
+
+#### Randomly Assigning address_id 
+
+```{r}
+set.seed(100) 
+sales_sampled <- sales[sample(nrow(sales), 900), ] # first, randomly selecting 900 sales 
+sales_df <- sales_sampled # renaming to follow convention
+head(sales_df)
+```
+
+```{r}
+address_ids_vector <- addresses_df$address_id 
+sampled_address_ids <- sample(address_ids_vector, 900) # second, randomly selecting 900 address_ids
+
+sales_df$address_id <- sampled_address_ids # assign to sales_df
+head(sales_df)
+```
+
+#### Randomly assigning client_id
+
+```{r}
+set.seed(100)
+
+sampled_client_ids <- sample(clients_info_df$client_id, 900) # randomly selecting 900 client_ids
+sales_df$client_id <- sampled_client_ids
+head(sales_df)
+```
+
+#### Generating and Randomly Assignment Sale Date
+
+```{r}
+# Assumption is that a sale occurred after the Broker or Real Estate Agent was hired
+# So, need to add employee_id to sales_df first then add sales_date strategically 
+brokers_agents <- employees_info_df[position %in% c("Broker", "Real Estate Agent")]
+
+set.seed(100)
+assigned_employees <- brokers_agents[sample(.N, nrow(sales_df), replace = TRUE)]
+sales_df[, employee_id := assigned_employees$employee_id]
+
+sales_df <- merge(
+  sales_df, 
+  employees_info_df[, .(employee_id, employee_since)], 
+  by.x = "employee_id", 
+  by.y = "employee_id", 
+  all.x = TRUE
+)
+
+latest_date <- ymd("2025-07-01")
+
+set.seed(100)
+sales_df[, sale_date := {
+  emp_start <- employee_since
+  days_range <- as.integer(difftime(latest_date, emp_start, units = "days")) # generate between emp_start and latest_date
+  days_range <- ifelse(days_range < 1, 1, days_range)
+  random_days <- sample(1:days_range, 1)
+  emp_start + days(random_days)
+}, by = .I]
+
+sales_df[, sale_id := sprintf("%05d", seq_len(.N) + 12300)] # adding offset again so it doesnt match other ids
+head(sales_df)
+```
+
+#### Randomly Generating Commission Amount 
+
+```{r}
+set.seed(100) 
+
+commission_pct <- runif(nrow(sales_df), min = 0.02, max = 0.07) # random percentages between 0.02 and 0.07
+sales_df[, commission_amount := round(median_price * commission_pct, 2)]
+head(sales_df)
+```
+
+#### Assigning commission_id
+
+```{r}
+sales_df[, commission_id := sprintf("%05d", seq_len(.N) + 849)] # adding offset again so it doesnt match other ids
+head(sales_df)
+```
+
+### Listings
+
+#### Generating listing_id
+
+```{r}
+# bringing over address_id from addresses_df
+listings_df <- data.frame(address_id = addresses_df$address_id, stringsAsFactors = FALSE)
+
+listings_df$listing_id <- sprintf("%05d", seq_len(nrow(listings_df)) + 8459) # offset so it does not match id
+head(listings_df)
+```
+
+#### Adding Listing Type Leveraging Apartment Number Assignment
+
+```{r}
+# merging
+listings_df <- merge(listings_df, addresses_df[, c("address_id", "apartment_number")], by = "address_id", all.x = TRUE)
+
+listings_df$listing_type <- ifelse(
+  !is.na(listings_df$apartment_number) & listings_df$apartment_number != "", 
+  "Apartment", 
+  "Home"
+)
+head(listings_df)
+```
+
+#### Generating Listing Price 
+
+```{r}
+# Assumption is that listing price is below sales price if address_id is in sampled_address_ids
+# If not, random sample from sales again to generate a listing_price
+
+set.seed(100)  
+
+sales_df$address_id <- as.character(sales_df$address_id)
+listings_df$address_id <- as.character(listings_df$address_id)
+
+median_price_lookup <- setNames(sales_df$median_price, sales_df$address_id)
+
+listing_price <- numeric(nrow(listings_df))
+
+for (i in seq_len(nrow(listings_df))) {
+  addr_id <- listings_df$address_id[i]
+  
+  if (addr_id %in% sampled_address_ids) {
+    median_price <- median_price_lookup[addr_id] # random price below median, between 80%-99% of median
+    listing_price[i] <- round(runif(1, 0.8, 0.99) * median_price, 2)
+  } else {
+    listing_price[i] <- sample(sales$median_price, 1)
+  }
+}
+
+listings_df$listing_price <- listing_price
+head(listings_df) 
+```
+
+#### Adding sale_id and Active
+
+```{r}
+listings_df <- listings_df %>%
+  left_join(sales_df %>% select(address_id, sale_id), by = "address_id") %>%
+  mutate(sale_id = ifelse(address_id %in% sampled_address_ids, sale_id, NA_character_))
+
+listings_df <- listings_df %>%
+  mutate(active = ifelse(is.na(sale_id), 1, 0))
+head(listings_df)
+```
+
+### Listing Features
+
+```{r}
+features_df <- data.frame(listing_id = listings_df$listing_id, stringsAsFactors = FALSE)
+
+features_df$l_features_id <- sprintf("%05d", seq_len(nrow(features_df)) + 632) # offset so it does not match id
+
+features_df <- features_df %>%
+  mutate(
+    bedrooms = NA,
+    bathrooms = NA,
+    square_feet = NA,
+    in_unit_washer = NA,
+    dishwasher = NA,
+    outdoor_space = NA,
+    elevator = NA,
+    doorman = NA,
+    laundry_room = NA,
+    pool = NA,
+    gym = NA,
+    rec_room = NA,
+    parking = NA
+  )
+head(features_df)
+```
+
+#### Randomly Generating Beds, Bathrooms, Square Feet
+
+```{r}
+set.seed(100) 
+
+features_df <- features_df %>%
+  rowwise() %>%
+  mutate(
+    bedrooms = sample(1:4, 1),
+    bathrooms = sample(1:bedrooms, 1),
+    square_feet = sample(50:400, 1)
+  ) %>%
+  ungroup()
+
+head(features_df)
+```
+
+#### Randomly Generating Boolean Values for Additional Features
+
+```{r}
+set.seed(100)
+
+bool_cols <- c(
+  "in_unit_washer",
+  "dishwasher",
+  "outdoor_space",
+  "elevator",
+  "doorman",
+  "laundry_room",
+  "pool",
+  "gym",
+  "rec_room",
+  "parking"
+)
+
+for (col in bool_cols) {
+  features_df[[col]] <- sample(c(0, 1), nrow(features_df), replace = TRUE, prob = c(0.8, 0.2))
+}
+
+head(features_df)
+```
+
+### Appointments
+
+```{r}
+# Starting point: Assumption is that all sales have had appointments prior
+appointments_df <- sales_df[, c("employee_id", "client_id", "address_id")]
+appointments_df <- merge(appointments_df, listings_df[, c("address_id", "listing_id")], by = "address_id", all.x = TRUE)
+head(appointments_df)
+```
+
+#### Adding appointment_type for Sold Apartments
+
+```{r}
+appointments_df$appointment_type <- "Signing Lease"
+head(appointments_df)
+```
+
+```{r}
+# Assumption is that majority of sold listings have also had a tour
+set.seed(100) 
+
+appointments_df <- appointments_df %>%
+  mutate(appointment_type = "Signing Lease")
+
+# Sample 75% of rows randomly to duplicate
+tour_rows <- appointments_df %>%
+  sample_frac(0.75) %>%
+  mutate(appointment_type = "Tour")
+
+appointments_df <- bind_rows(appointments_df, tour_rows)
+head(appointments_df)
+```
+
+#### Adding appointment_id 
+
+```{r}
+appointments_df$appointment_id <- sprintf("%05d", seq_len(nrow(appointments_df)) + 422) # offset so it does not match id
+head(appointments_df)
+```
+
+### Equipment 
+
+#### Defining Types of Equipment
+
+```{r}
+equipment_types_df <- data.frame(
+  equipment_type_id = 1:4,
+  equipment_type_name = c("Staging Furniture", "Signage", "DSLR Camera", "Lockboxes"),
+  stringsAsFactors = FALSE
+)
+equipment_types_df
+```
+
+#### Cataloguing Equipment 
+
+```{r}
+equipment_df <- merge(
+  offices_df["office_id"], 
+  equipment_types_df["equipment_type_id"], 
+  by = NULL
+)
+```
+
+#### Randomly Assigning Equipment to Employee
+
+```{r}
+eligible_employees <- employees_info_df[position %in% c("Real Estate Agent", "Broker", "Property Manager", "Leasing Agent")]
+
+set.seed(100) 
+equipment_df$employee_id <- sample(eligible_employees$employee_id, nrow(equipment_df), replace = TRUE)
+head(equipment_df)
+```
+
+#### Generating equipment_id
+
+```{r}
+equipment_df$equipment_id <- sprintf("%05d", seq_len(nrow(equipment_df)) + 7777) # offset so it does not match id
+head(equipment_df)
+```
+
+### Expenses
+
+#### Defining Expense Categories 
+
+```{r}
+# for all employees: Travel Reimbursement, 
+# for Real Estate Agent, Broker, Property Manager, Leasing Agents: Client Experience, Building Maintenance
+# For Marking Coordinator, Marketing Manager: Marketing Materials 
+# For Administrative Assistant, Office Manager: Office Supplies 
+
+expense_categories_df <- data.frame(
+  expense_category_name = c(
+    "Travel",
+    "Client Experience",
+    "Building Maintenance",
+    "Marketing Materials",
+    "Office Supplies"
+  )
+)
+
+expense_categories_df$expense_category_id <- 1:nrow(expense_categories_df)
+head(expense_categories_df)
+```
+
+#### Generating Expenses 
+
+```{r}
+expenses_df <- data.frame(expense_category_id = expense_categories_df$expense_category_id)
+
+set.seed(100)
+
+category_ids <- expenses_df$expense_category_id
+random_expense_ids <- sample(category_ids, size = 500, replace = TRUE)
+
+
+expenses_df <- data.frame(expense_category_id = random_expense_ids)
+head(expenses_df)
+```
+
+#### Randomly Assigning Employees to Expenses
+
+```{r}
+all_employees <- employees_info_df$employee_id
+
+# starting with Travel, expense_category_id == 1
+expense_1_rows <- which(expenses_df$expense_category_id == 1)
+
+set.seed(100)
+expenses_df$employee_id <- NA  # initialize
+expenses_df$employee_id[expense_1_rows] <- sample(all_employees, length(expense_1_rows), replace = TRUE)
+
+# moving onto Marketing Materials and Client Experience, expense_category_id == 2 and expense_category_id == 3 
+eligible_positions <- c("Real Estate Agent", "Broker", "Property Manager", "Leasing Agent")
+eligible_employees <- employees_info_df[employees_info_df$position %in% eligible_positions, ]
+
+expense_2_3_rows <- which(expenses_df$expense_category_id %in% c(2, 3))
+
+set.seed(100)
+expenses_df$employee_id[expense_2_3_rows] <- sample(
+  eligible_employees$employee_id, 
+  length(expense_2_3_rows), 
+  replace = TRUE
+)
+
+# next is Marketing Materials, expense_category_id == 4
+marketing_positions <- c("Marketing Coordinator", "Marketing Manager")
+marketing_employees <- employees_info_df[employees_info_df$position %in% marketing_positions, ]
+
+expense_4_rows <- which(expenses_df$expense_category_id == 4)
+
+set.seed(100)
+expenses_df$employee_id[expense_4_rows] <- sample(
+  marketing_employees$employee_id,
+  length(expense_4_rows),
+  replace = TRUE)
+
+# last is Office Supplies, expense_category_id == 5
+admin_positions <- c("Administrative Assistant", "Office Manager")
+admin_employees <- employees_info_df[employees_info_df$position %in% admin_positions, ]
+
+expense_5_rows <- which(expenses_df$expense_category_id == 5)
+
+set.seed(100)
+expenses_df$employee_id[expense_5_rows] <- sample(
+  admin_employees$employee_id,
+  length(expense_5_rows),
+  replace = TRUE
+)
+head(expenses_df)
+```
+
+#### Adding Employee's Offices 
+
+```{r}
+expenses_df <- merge(
+  expenses_df,
+  employees_info_df[, c("employee_id", "office_id")],
+  by = "employee_id",
+  all.x = TRUE
+)
+head(expenses_df)
+```
+
+#### Adding Expense Date
+
+```{r}
+setDT(expenses_df)
+setDT(employees_info_df)
+expenses_df <- employees_info_df[, .(employee_id, employee_since)][expenses_df, on = "employee_id"]
+
+max_expense_date <- as.Date("2025-07-01")
+
+set.seed(100)
+
+expenses_df[, expense_date := {
+  start_num <- as.numeric(employee_since)
+  end_num <- as.numeric(max_expense_date)
+  mapply(function(s, e) {
+    if (is.na(s) || s > e) return(NA)
+    sample(seq(s, e), 1)
+  }, start_num, end_num)
+}]
+
+expenses_df[, expense_date := as.Date(expense_date, origin = "1970-01-01")]
+# expenses_df[expense_date <= employee_since]
+head(expenses_df)
+```
+
+#### Adding Expense Amount 
+
+```{r}
+expenses_df[, employee_since := NULL] # first removing the employee_since column 
+
+
+# Assumption is that each category has a range of acceptable expense values
+expenses_df[, expense_amount := fifelse(
+  expense_category_id == 1, runif(.N, 300, 1500),
+  fifelse(expense_category_id == 2, runif(.N, 100, 600),
+  fifelse(expense_category_id == 3, runif(.N, 100, 800),
+  fifelse(expense_category_id == 4, runif(.N, 50, 500),
+  runif(.N, 50, 200)  # for category_id == 5 or fallback
+))))]
+
+expenses_df[, expense_amount := round(expense_amount, 2)]
+head(expenses_df)
+```
+
+#### Creating expense_id 
+
+```{r}
+expenses_df[, expense_id := sprintf("%05d", .I + 9983)]
+head(expenses_df)
+```
+
+### Parks 
+
+```{r}
+parks <- fread("Parks_Properties_20250727.csv")
+setDT(parks)
+head(parks)
+```
+
+```{r}
+parks_df <- parks[, .(EAPPLY, ZIPCODE)]
+setnames(parks_df, old = c("EAPPLY", "ZIPCODE"), new = c("park_name", "zipcode"))
+parks_df <- parks_df[trimws(park_name) != ""]
+parks_df <- parks_df[
+  !grepl(",", zipcode) & str_count(park_name, " ") == 2
+]
+head(parks_df)
+```
+
+```{r}
+setDT(parks_df)
+setDT(addresses_df)
+
+set.seed(100)
+sampled_ids <- sample(addresses_df$address_id, nrow(parks_df), replace = TRUE)
+
+parks_df[, address_id := sampled_ids]
+
+parks_df[, p_id := sprintf("%05d", .I + 222)]
+
+head(parks_df)
+```
+
+### Parks Addresses
+
+```{r}
+parks_addresses_df <- data.frame(
+  p_id = parks_df$p_id, 
+  address_id = parks_df$address_id
+)
+parks_addresses_df
+```
+
+### Maintenance Code Violations
+
+#### Reading in NYC OpenData Resource
+
+```{r}
+violations <- fread("Housing_Maintenance_Code_Violations_20250727.csv")
+setDT(violations)
+head(violations)
+```
+
+```{r}
+violations_df <- violations[, .(Class)]
+setnames(violations_df, old = "Class", new = "class")
+unique(violations_df$class)
+```
+
+```{r}
+violations_df <- violations_df[1:500]
+
+setDT(violations_df)
+setDT(addresses_df)
+
+set.seed(100)
+violations_df[, address_id := sample(addresses_df$address_id, .N, replace = TRUE)]
+
+violations_df[, v_id := sprintf("%05d", .I + 98763)]
+
+head(violations_df)
+```
+
+### Service Requests
+
+#### Reading in NYC OpenData Resource
+
+```{r}
+servicereqs <- fread("311_Service_Requests_from_2010_to_Present_20250727.csv")
+
+setDT(servicereqs)
+head(servicereqs)
+```
+
+```{r}
+servicereqs_df <- servicereqs[!is.na(`Complaint Type`), .(`Complaint Type`)]
+servicereqs_df <- servicereqs_df[1:500]
+head(servicereqs_df)
+```
+
+```{r}
+setDT(servicereqs_df)
+setDT(addresses_df)
+
+set.seed(100)
+servicereqs_df[, address_id := sample(addresses_df$address_id, .N, replace = TRUE)]
+
+servicereqs_df[, sr_id := sprintf("%05d", .I + 5883)]
+head(servicereqs_df)
+```
+
+### Schools
+
+#### Reading in Data
+
+```{r}
+# https://data.nysed.gov/downloads.php
+schoolnames <- data.table(school_name = readLines("school_names.csv"))
+schoolnames <- schoolnames[-1]
+
+setDT(schoolnames)
+head(schoolnames)
+```
+
+```{r}
+schoolnames_df <- schoolnames[1:5000]
+schoolnames_df[, school_name := str_to_title(str_squish(school_name))]
+head(schoolnames_df)
+```
+
+#### Adding Zipcode (same technique as before)
+
+```{r}
+schoolnames_df$zipcode <- sample(10000:14000, nrow(schoolnames_df), replace = TRUE)
+head(schoolnames_df)
+```
+
+```{r}
+# many-to-one join for address_id
+setDT(schoolnames_df)
+setDT(addresses_df)
+
+schoolnames_df <- addresses_df[schoolnames_df, on = "zipcode", allow.cartesian = TRUE]
+setcolorder(schoolnames_df, c("school_name", "zipcode", "address_id"))
+schoolnames_df <- schoolnames_df[, .(school_name, zipcode, address_id)]
+
+# filling NAs with other address_id
+na_indices <- which(is.na(schoolnames_df$address_id))
+non_na_ids <- schoolnames_df$address_id[!is.na(schoolnames_df$address_id)]
+schoolnames_df$address_id[na_indices] <- sample(non_na_ids, length(na_indices), replace = TRUE)
+head(schoolnames_df)
+```
+
+```{r}
+schoolnames_df[, s_id := sprintf("%08d", .I + 49930)]
+head(schoolnames_df)
+```
+
+### Schools_Addresses
+
+```{r}
+schools_addresses_df <- data.frame(
+  s_id = schoolnames_df$s_id,
+  addresss_id = schoolnames_df$address_id
+)
+head(schools_addresses_df)
+```
+
+## Writing to .csv for ETL Continuation in Python 
+
+```{r}
+final_positions_df <- data.frame(
+  position_id = unique(employees_info_df$position_id),
+  position_title = unique(employees_info_df$position)
+)
+setDT(final_positions_df)
+head(final_positions_df)
+fwrite(final_positions_df, "positions.csv")
+```
+
+```{r}
+final_departments_df <- data.frame(
+  department_id = unique(employees_info_df$department_id),
+  department_name = unique(employees_info_df$department)
+)
+setDT(final_departments_df)
+head(final_departments_df)
+fwrite(final_departments_df, "departments.csv")
+```
+
+```{r}
+final_employees_df <- data.frame(
+  employee_id = employees_info_df$employee_id,
+  office_id = employees_info_df$office_id,
+  first_name = employees_info_df$first_name,
+  last_name = employees_info_df$last_name,
+  position_id = employees_info_df$position_id,
+  department_id = employees_info_df$department_id,
+  employee_since = employees_info_df$employee_since,
+  email = employees_info_df$email
+)
+setDT(final_employees_df)
+head(final_employees_df)
+fwrite(final_employees_df, "employees.csv")
+```
+
+```{r}
+final_payrolls_df <- data.frame(
+  payroll_id = employees_info_df$payroll_id,
+  employee_id = employees_info_df$employee_id,
+  base_salary = employees_info_df$salary
+)
+setDT(final_payrolls_df)
+head(final_payrolls_df)
+fwrite(final_payrolls_df, "payrolls.csv")
+```
+
+```{r}
+final_offices_df <- data.frame(
+  office_id = offices_df$office_id,
+  address = offices_df$address,
+  city = offices_df$city,
+  state = offices_df$state,
+  phone_number = offices_df$phone_number
+)
+setDT(final_offices_df)
+head(final_offices_df)
+fwrite(final_offices_df, "offices.csv")
+```
+
+```{r}
+final_equipment_df <- data.frame(
+  equipment_id = equipment_df$employee_id,
+  office_id = equipment_df$office_id,
+  employee_id = equipment_df$employee_id,
+  equipment_type_id = equipment_df$equipment_type_id
+)
+setDT(final_equipment_df)
+head(final_equipment_df)
+fwrite(final_equipment_df, "equipment.csv")
+```
+
+```{r}
+final_equipment_types_df <- data.frame(
+  equipment_type_id = equipment_types_df$equipment_type_id,
+  equipment_type_name = equipment_types_df$equipment_type_name
+)
+setDT(final_equipment_types_df)
+head(final_equipment_types_df)
+fwrite(final_equipment_types_df, "equipment_types.csv")
+```
+
+```{r}
+final_expenses_df <- data.frame(
+  expense_category_id = expenses_df$expense_category_id,
+  expense_id = expenses_df$expense_id,
+  office_id = expenses_df$office_id,
+  employee_id = expenses_df$employee_id,
+  expense_amount = expenses_df$expense_amount,
+  expense_date = expenses_df$expense_date
+)
+setDT(final_expenses_df)
+head(final_expenses_df)
+fwrite(final_expenses_df, "expenses.csv")
+```
+
+```{r}
+final_expense_categories_df <- data.frame(
+  expense_category_id = expense_categories_df$expense_category_id,
+  expense_category_name = expense_categories_df$expense_category_name
+)
+setDT(final_expense_categories_df)
+head(final_expense_categories_df)
+fwrite(final_expense_categories_df, "expense_categories.csv")
+```
+
+```{r}
+final_clients_df <- data.frame(
+  client_id = clients_info_df$client_id,
+  first_name = clients_info_df$first_name,
+  last_name = clients_info_df$last_name,
+  family_size = clients_info_df$family_size,
+  income = clients_info_df$income
+)
+setDT(final_clients_df)
+head(final_clients_df)
+fwrite(final_clients_df, "clients.csv")
+```
+
+```{r}
+final_sales_df <- data.frame(
+  sale_id = sales_df$sale_id,
+  client_id = sales_df$client_id,
+  property_id = sales_df$address_id,
+  sale_price = sales_df$median_price,
+  sale_date = sales_df$sale_date
+)
+setDT(final_sales_df)
+head(final_sales_df)
+fwrite(final_sales_df, "sales.csv")
+```
+
+```{r}
+final_properties_df <- data.frame(
+  property_id = addresses_df$address_id,
+  building_number = addresses_df$building_number,
+  street_name = addresses_df$street_name,
+  apartment = addresses_df$apartment_number,
+  city = addresses_df$city,
+  state = addresses_df$state,
+  zip_code = addresses_df$zipcode
+)
+setDT(final_properties_df)
+head(final_properties_df)
+fwrite(final_properties_df, "properties.csv")
+```
+
+```{r}
+final_commissions_df <- data.frame(
+  commission_id = sales_df$commission_id,
+  employee_id = sales_df$employee_id,
+  sale_id = sales_df$sale_id,
+  commission_amount = sales_df$commission_amount
+)
+setDT(final_commissions_df)
+head(final_commissions_df)
+fwrite(final_commissions_df, "commissions.csv")
+```
+
+```{r}
+final_appointments_df <- data.frame(
+  appointment_id = appointments_df$appointment_id,
+  appointment_type = appointments_df$appointment_type,
+  employee_id = appointments_df$employee_id,
+  client_id = appointments_df$client_id,
+  listing_id = appointments_df$listing_id
+)
+setDT(final_appointments_df)
+head(final_appointments_df)
+fwrite(final_appointments_df, "appointments.csv")
+```
+
+```{r}
+final_listings_df <- data.frame(
+  listing_id = listings_df$listing_id,
+  property_id = listings_df$address_id,
+  listing_type = listings_df$listing_type,
+  listing_price = listings_df$listing_price,
+  sale_id = listings_df$sale_id,
+  active = listings_df$active
+)
+setDT(final_listings_df)
+head(final_listings_df)
+fwrite(final_listings_df, "listings.csv")
+```
+
+```{r}
+final_listing_features_df <- data.frame(
+  l_features_id = features_df$l_features_id,
+  listing_id = features_df$listing_id,
+  bedrooms = features_df$bedrooms,
+  bathrooms = features_df$bathrooms,
+  square_feet = features_df$square_feet,
+  in_unit_washer = features_df$in_unit_washer,
+  dishwasher = features_df$dishwasher,
+  outdoor_space = features_df$outdoor_space,
+  elevator = features_df$elevator,
+  doorman = features_df$doorman,
+  laundry_room = features_df$laundry_room,
+  pool = features_df$pool,
+  gym = features_df$gym,
+  rec_room = features_df$rec_room,
+  parking = features_df$parking
+)
+setDT(final_listing_features_df)
+head(final_listing_features_df)
+fwrite(final_listing_features_df, "listing_features.csv")
+```
+
+```{r}
+final_violations_df <- data.frame(
+  v_id = violations_df$v_id,
+  property_id = violations_df$address_id,
+  class = violations_df$class
+)
+setDT(final_violations_df)
+head(final_violations_df)
+fwrite(final_violations_df, "violations.csv")
+```
+
+```{r}
+final_parks_df <- data.frame(
+  p_id = parks_df$p_id,
+  property_id = parks_df$address_id,
+  park_name = parks_df$park_name,
+  zip_code = parks_df$zipcode
+)
+setDT(final_parks_df)
+head(final_parks_df)
+fwrite(final_parks_df, "parks.csv")
+```
+
+```{r}
+final_parks_addresses_df <- data.frame(
+  p_id = parks_addresses_df$p_id,
+  property_id = parks_addresses_df$address_id
+)
+setDT(final_parks_addresses_df)
+head(final_parks_addresses_df)
+fwrite(final_parks_addresses_df, "parks_addresses.csv")
+```
+
+```{r}
+final_service_requests_df <- data.frame(
+  sr_id = servicereqs_df$sr_id,
+  property_id = servicereqs_df$address_id,
+  complaint_type = servicereqs_df$`Complaint Type`
+)
+setDT(final_service_requests_df)
+head(final_service_requests_df)
+fwrite(final_service_requests_df, "service_requests.csv")
+```
+
+```{r}
+final_schools_df <- data.frame(
+  s_id = schoolnames_df$s_id,
+  property_id = schoolnames_df$address_id,
+  school_name = schoolnames_df$school_name,
+  zip_code = schoolnames_df$zipcode
+)
+setDT(final_schools_df)
+head(final_schools_df)
+fwrite(final_schools_df, "schools.csv")
+```
+
+```{r}
+final_schools_addresses_df <- data.frame(
+  s_id = schools_addresses_df$s_id,
+  property_id = schools_addresses_df$addresss_id
+)
+setDT(final_schools_addresses_df)
+head(final_schools_addresses_df)
+fwrite(final_schools_addresses_df, "schools_addresses.csv")
+```
+
+
+
+
