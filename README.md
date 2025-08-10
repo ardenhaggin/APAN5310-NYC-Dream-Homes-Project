@@ -8,6 +8,6 @@ Project Description: <br>
 1. [Database Design](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/Database%20Design)
 2. [ETL](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/ETL)
 3. [Analytical Procedures](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/Analytical%20Procedures)
-4. Final Report, Presentation, & Supplementary Documentation
+4. Final Report, Presentation, & Supplemental Documentation
 
 #### Database Design <br> 
