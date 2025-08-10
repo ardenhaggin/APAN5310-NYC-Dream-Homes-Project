@@ -5,7 +5,8 @@ Authors:  Daniel Jesurum Cumberbatch, David Skorodinsky, Arden Haggin <br>
 
 ### Folder Structure <br> 
 1. [Database Design](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/Database%20Design) <br>
-  a. [Final ER Diagram](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/blob/main/Database%20Design/Final%20ER%20Diagram.pdf)
+  a. [Final ER Diagram](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/blob/main/Database%20Design/Final%20ER%20Diagram.pdf) <br>
+  b. [SQL Script for Table Creation](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/blob/main/Database%20Design/tables.sql) <br>
 3. [ETL](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/ETL)
 4. [Analytical Procedures](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/Analytical%20Procedures)
 5. [Final Report, Presentation, & Supplemental Documentation](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/Final%20Report%2C%20Presentation%2C%20%26%20Supplemental%20Documentation)
