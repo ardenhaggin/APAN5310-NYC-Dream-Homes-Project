@@ -1,8 +1,7 @@
 # APAN5310: Dream Homes NYC Project
 
-## Creating A Modern Database for Dream Homes NYC
-### Leveraging SQL For Dynamic Reporting & Insights <br> 
-#### Daniel Jesurum Cumberbatch, David Skorodinsky, Arden Haggin <br>
+Title: Creating A Modern Database for Dream Homes NYC: Leveraging SQL For Dynamic Reporting & Insights <br> 
+Authors: Daniel Jesurum Cumberbatch, David Skorodinsky, Arden Haggin <br>
 
 ### Folder Structure <br> 
 1. [Database Design](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/Database%20Design) <br>
