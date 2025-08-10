@@ -369,7 +369,7 @@ renderPlot({
     left_join(employees, by = "employee_id") %>%
     left_join(positions, by = "position_id") %>%
     left_join(offices, by = "office_id") %>%
-    mutate(employee_name = paste(last_name, first_name))
+    mutate(employee_name = paste(first_name, last_name))
 
   summary_data <- employee_commissions_full %>%
     filter(address == input$selected_address,
