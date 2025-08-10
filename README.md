@@ -4,7 +4,7 @@ Title: Creating A Modern Database for Dream Homes NYC: Leveraging SQL For Dynami
 Authors:  Daniel Jesurum Cumberbatch, David Skorodinsky, Arden Haggin <br>
 
 ### Folder Structure <br> 
-1. [Database Design](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/Database%20Design)
+1. [Database Design](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/Database%20Design): .pdf of ER Diagram, .sql of table creation process 
 2. [ETL](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/ETL)
 3. [Analytical Procedures](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/Analytical%20Procedures)
 4. [Final Report, Presentation, & Supplemental Documentation](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/Final%20Report%2C%20Presentation%2C%20%26%20Supplemental%20Documentation)
