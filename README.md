@@ -10,7 +10,10 @@ Authors:  Daniel Jesurum Cumberbatch, David Skorodinsky, Arden Haggin <br>
 3. [ETL](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/ETL) <br>
   a. [R Markdown for Data Cleaning and Simulation](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/blob/main/ETL/DataCleaning_Simulation.Rmd) <br>
   b. [Jupyter Notebook for Python ETL Pipeline](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/blob/main/ETL/ETL%20Pipeline.ipynb) <br>
-4. [Analytical Procedures](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/Analytical%20Procedures)
+4. [Analytical Procedures](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/Analytical%20Procedures) <br>
+  a. [R Markdown for Shiny Dynamic Reporting Dashboard](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/blob/main/Analytical%20Procedures/Dynamic%20Reporting%20Dashboard%20(C%20Suite).Rmd) <br>
+  b. [SQL Script for Views Creation](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/blob/main/Analytical%20Procedures/Views%20(Analysts).sql) <br>
+  c. [SQL Script for 10 Example Queries](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/blob/main/Analytical%20Procedures/10%20Queries%20(Analysts).sql)
 5. [Final Report, Presentation, & Supplemental Documentation](https://github.com/ardenhaggin/APAN5310-NYC-Dream-Homes-Project/tree/main/Final%20Report%2C%20Presentation%2C%20%26%20Supplemental%20Documentation)
 
 #### Data Sources
