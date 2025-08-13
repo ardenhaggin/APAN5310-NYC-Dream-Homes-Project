@@ -109,9 +109,9 @@ formatted_total_sales <- scales::comma(total_sales)
 
 # Introduction
 
-The purpose of this Dynamic Reporting Dashboard is to assist NYC Dream Homes executives in extracting key insights from our database. 
+The purpose of this Dynamic Reporting Dashboard is to assist Dream Homes NYC executives in extracting key insights from our database. 
 
-Here are some high-level details about NYC Dream Homes: <br>
+Here are some high-level details about Dream Homes NYC: <br>
 
 &nbsp;&nbsp;&nbsp;&nbsp;**Metrics to Support Firm Organization**: <br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- Number of Current Clients: `r num_clients` <br>
